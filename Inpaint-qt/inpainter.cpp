@@ -1,3 +1,7 @@
+/*Author : Rahul Verma  
+ *Date 22/06/13
+ */
+
 #include "inpainter.h"
 
 bool inpainter::inpaint(cv::Mat &src,cv::Mat &result,cv::Mat &msk,bool quickInpaint){

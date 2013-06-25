@@ -165,7 +165,10 @@ bool inpainter::inpaint(cv::Mat &src,cv::Mat &result,cv::Mat &msk,bool quickInpa
                             continue;
                           pixel1=workImage.at<cv::Vec3b>(currentUpperLeft.y+y2,currentUpperLeft.x+x2);
                           pixel2=workImage.at<cv::Vec3b>(a.y+y2,a.x+x2);
-                          pixel1=pixel1-pixel2;
+                          pixel1[0]=pixel1[0]-pixel2[0];
+                          pixel1[1]=pixel1[1]-pixel2[1];
+                          pixel1[2]=pixel1[2]-pixel2[2];
+                          
                           error+=(pixel1[0]*pixel1[0])+(pixel1[1]*pixel1[1])+(pixel1[2]*pixel1[2]);
 
 //                        pixeli1=grayImage.at<uchar>(currentUpperLeft.y+y2,currentUpperLeft.x+x2);
@@ -230,6 +233,7 @@ bool inpainter::inpaint(cv::Mat &src,cv::Mat &result,cv::Mat &msk,bool quickInpa
 
     }
 
+    result=workImage.clone();
     std::cout<<"done";
 
 

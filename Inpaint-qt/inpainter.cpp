@@ -1,249 +1,335 @@
-/*Author : Rahul Verma  
- *Date 22/06/13
- */
-
 #include "inpainter.h"
 
-bool inpainter::inpaint(cv::Mat &src,cv::Mat &result,cv::Mat &msk,bool quickInpaint){
-    this->originalImage=src.clone();
-    this->workImage=originalImage.clone();
-    cv::cvtColor(workImage,grayImage,CV_BGR2GRAY);
-    this->mask=msk.clone();
-    result.create(originalImage.size(),originalImage.type());
+Inpainter::Inpainter(cv::Mat inputImage,cv::Mat mask,int halfPatchWidth,int mode){
+    this->inputImage=inputImage.clone();
+    this->mask=mask.clone();
+    this->updatedMask=mask.clone();
+    this->workImage=inputImage.clone();
+    this->result.create(inputImage.size(),inputImage.type());
+    this->mode=mode;
+    this->halfPatchWidth=halfPatchWidth;
+}
 
-    //if(!CV_ARE_SIZES_EQ(originalImage,mask)||!CV_ARE_SIZES_EQ(originalImage,result))
-    //   return false;
-    if(originalImage.type()!=CV_8UC3||mask.type()!=CV_8UC1)
-        return false;
+int Inpainter::checkValidInputs(){
+    if(this->inputImage.type()!=CV_8UC3)
+        return ERROR_INPUT_MAT_INVALID_TYPE;
+    if(this->mask.type()!=CV_8UC1)
+        return ERROR_INPUT_MASK_INVALID_TYPE;
+    if(!CV_ARE_SIZES_EQ(&mask,&inputImage))
+        return ERROR_MASK_INPUT_SIZE_MISMATCH;
+    if(halfPatchWidth==0)
+        return ERROR_HALF_PATCH_WIDTH_ZERO;
+    return CHECK_VALID;
+}
 
 
-    GradientCalculator gc;
-    gc.calculateGradient(originalImage);
-    this->gradientX=gc.getGradX();
-    this->gradientY=gc.getGradY();
+void Inpainter::inpaint(){
+
+    cv::namedWindow("updatedMask");
+    cv::namedWindow("inpaint");
+    cv::namedWindow("gradientX");
+    cv::namedWindow("gradientY");
+
+    initializeMats();
+    calculateGradients();
+    bool stay=true;
+    while(stay){
+
+        computeFillFront();
+        computeConfidence();
+        computeData();
+        computeTarget();
+        computeBestPatch();
+        updateMats();
+        stay=checkEnd();
+
+        cv::imshow("updatedMask",updatedMask);
+        cv::imshow("inpaint",workImage);
+        cv::imshow("gradientX",gradientX);
+        cv::imshow("gradientY",gradientY);
+        cv::waitKey(2);
+    }
+    result=workImage.clone();
 
 
-    //set initial confidence values, 1 for source region pixels and 0 for target region pixels
+    cv::namedWindow("confidence");
+    cv::imshow("confidence",confidence);
+}
+
+void Inpainter::calculateGradients(){
+    cv::Mat srcGray;
+    cv::cvtColor(workImage,srcGray,CV_BGR2GRAY);
+
+    cv::Scharr(srcGray,gradientX,CV_16S,1,0);
+    cv::convertScaleAbs(gradientX,gradientX);
+    gradientX.convertTo(gradientX,CV_32F);
+
+
+    cv::Scharr(srcGray,gradientY,CV_16S,0,1);
+    cv::convertScaleAbs(gradientY,gradientY);
+    gradientY.convertTo(gradientY,CV_32F);
+
+
+
+
+
+
+    for(int x=0;x<sourceRegion.cols;x++){
+        for(int y=0;y<sourceRegion.rows;y++){
+
+            if(sourceRegion.at<uchar>(y,x)==0){
+                gradientX.at<float>(y,x)=0;
+                gradientY.at<float>(y,x)=0;
+            }/*else
+            {
+                if(gradientX.at<float>(y,x)<255)
+                    gradientX.at<float>(y,x)=0;
+                if(gradientY.at<float>(y,x)<255)
+                    gradientY.at<float>(y,x)=0;
+            }*/
+
+        }
+    }
+    gradientX/=255;
+    gradientY/=255;
+}
+
+void Inpainter::initializeMats(){
     cv::threshold(this->mask,this->confidence,10,255,CV_THRESH_BINARY);
     cv::threshold(confidence,confidence,2,1,CV_THRESH_BINARY_INV);
     confidence.convertTo(confidence,CV_32F);
 
-    //set initial binarySource values, 1 for source region pixels and 0 for target region pixels
-    this->source=confidence.clone();
-    this->source.convertTo(source,CV_8U);
-    this->originalSource=source.clone();
+    this->sourceRegion=confidence.clone();
+    this->sourceRegion.convertTo(sourceRegion,CV_8U);
+    this->originalSourceRegion=sourceRegion.clone();
 
-    //set initiall binaryTarget values, 1 for target region pixels and 0 for source region pixels
-    cv::threshold(mask,this->target,10,255,CV_THRESH_BINARY);
-    cv::threshold(target,target,2,1,CV_THRESH_BINARY);
-    target.convertTo(target,CV_32F);
-
-    //set initial data values for every pixel equal to -0.1;
-    data=cv::Mat(originalImage.rows,originalImage.cols,CV_32F,cv::Scalar::all(-0.1));
-
-    cv::Mat lapKern=cv::Mat::ones(3,3,CV_32F),normKernX=cv::Mat(1,3,CV_32F),normKernY=cv::Mat(3,1,CV_32F);
-    lapKern.at<float>(1,1)=-8;
-    normKernX.at<float>(0,1)=0;
-    normKernX.at<float>(0,0)=-1;
-    normKernX.at<float>(0,2)=1;
-    normKernY.at<float>(1,0)=0;
-    normKernY.at<float>(0,0)=-1;
-    normKernY.at<float>(2,0)=1;
+    cv::threshold(mask,this->targetRegion,10,255,CV_THRESH_BINARY);
+    cv::threshold(targetRegion,targetRegion,2,1,CV_THRESH_BINARY);
+    targetRegion.convertTo(targetRegion,CV_8U);
+    data=cv::Mat(inputImage.rows,inputImage.cols,CV_32F,cv::Scalar::all(0));
 
 
-    cv::Mat boundryMat,normalMatX,normalMatY;
-    std::vector<cv::Point2f> fillFront,unitNormals;
-
-    int x,y,i,x2,y2,targetIndex,currentPatchWidth,currentPatchHeight,pixeli1,pixeli2;
-    float dx,dy,tempF,data,maxPriority;
-
-    double minimumError,error;
-    cv::Vec3d pixel1,pixel2;
-    cv::Point2f a,b,normal,currentUpperLeft,currentLowerRight,bestMatchUpperLeft,bestMatchLowerRight;
-
-    bool stay=true,skipPatch;
-    while(stay){
+    LAPLACIAN_KERNEL=cv::Mat::ones(3,3,CV_32F);
+    LAPLACIAN_KERNEL.at<float>(1,1)=-8;
+    NORMAL_KERNELX=cv::Mat::zeros(3,3,CV_32F);
+    NORMAL_KERNELX.at<float>(1,0)=-1;
+    NORMAL_KERNELX.at<float>(1,2)=1;
+    cv::transpose(NORMAL_KERNELX,NORMAL_KERNELY);
 
 
-        cv::filter2D(target,boundryMat,CV_32F,lapKern);
-        cv::filter2D(target,normalMatX,CV_32F,normKernX);
-        cv::filter2D(target,normalMatY,CV_32F,normKernY);
+}
+void Inpainter::computeFillFront(){
 
 
+    cv::Mat sourceGradientX,sourceGradientY,boundryMat;
+    cv::filter2D(targetRegion,boundryMat,CV_32F,LAPLACIAN_KERNEL);
+    cv::filter2D(sourceRegion,sourceGradientX,CV_32F,NORMAL_KERNELX);
+    cv::filter2D(sourceRegion,sourceGradientY,CV_32F,NORMAL_KERNELY);
+    fillFront.clear();
+    normals.clear();
+    for(int x=0;x<boundryMat.cols;x++){
+        for(int y=0;y<boundryMat.rows;y++){
 
-        fillFront.clear();
-        unitNormals.clear();
+            if(boundryMat.at<float>(y,x)>0){
+                fillFront.push_back(cv::Point2i(x,y));
 
-        for(x=0;x<boundryMat.cols;x++){
-            for(y=0;y<boundryMat.rows;y++){
-                if(boundryMat.at<float>(y,x)>0){
-                    fillFront.push_back(cv::Point2f(x,y));
-                    dx=normalMatX.at<float>(y,x);
-                    dy=normalMatY.at<float>(y,x);
-                    normal=cv::Point2f(dy,-dx);
-                    tempF=std::sqrt((normal.x*normal.x)+(normal.y*normal.y));
-                    if(tempF!=0){
+                float dx=sourceGradientX.at<float>(y,x);
+                float dy=sourceGradientY.at<float>(y,x);
+                cv::Point2f normal(dy,-dx);
+                float tempF=std::sqrt((normal.x*normal.x)+(normal.y*normal.y));
+                if(tempF!=0){
 
-                    normal.x=normal.x/tempF;
-                    normal.y=normal.y/tempF;
-
-                    }
-                    unitNormals.push_back(normal);
-
+                normal.x=normal.x/tempF;
+                normal.y=normal.y/tempF;
 
                 }
-            }
-        }
-
-        std::cout<<std::endl<<fillFront.size();
-
-
-        for(i=0;i<fillFront.size();i++){
-            tempF=0;
-
-            getPatch(fillFront.at(i),a,b);
-            for(x=a.x;x<=b.x;x++){
-                for(y=a.y;y<=b.y;y++){
-                    if(target.at<float>(y,x)==0)
-                        tempF+=confidence.at<float>(y,x);
-                }
-            }
-            y2=((cv::Point2f)fillFront.at(i)).y;
-            x2=((cv::Point2f)fillFront.at(i)).x;
-            confidence.at<float>(y2,x2)=tempF/((b.x-a.x+1)*(b.y-a.y+1));
-
-        }
-
-
-        maxPriority=-1;
-        targetIndex=-1;
-        for(i=0;i<fillFront.size();i++){
-            y=((cv::Point2f)fillFront.at(i)).y;
-            x=((cv::Point2f)fillFront.at(i)).x;
-
-            data=std::fabs(gradientY.at<float>(y,x)*((cv::Point2f)unitNormals.at(i)).x-gradientX.at<float>(y,x)*((cv::Point2f)unitNormals.at(i)).y)+.001;
-            //std::cout<<std::endl<<"data "<<data<<std::endl<<"conf "<<confidence.at<float>(y,x)<<std::endl<<"normal "<<unitNormals.at(i);
-
-            tempF=data*confidence.at<float>(y,x);
-            if(tempF>maxPriority){
-                maxPriority=tempF;
-                targetIndex=i;
-            }
-
-        }
-
-        if(targetIndex==-1){
-        targetIndex=0;
-        }
-        minimumError=9999999999999999;
-
-
-        getPatch(fillFront.at(targetIndex),a,b);
-        currentPatchWidth=b.x-a.x+1;
-        currentPatchHeight=b.y-a.y+1;
-        for(x=0;x<workImage.cols-(currentPatchWidth);x++){
-            for(y=0;y<workImage.rows-(currentPatchHeight);y++){
-                currentUpperLeft=cv::Point2f(x,y);
-                currentLowerRight=cv::Point2f(x+currentPatchWidth-1,y+currentPatchHeight-1);
-                skipPatch=false;
-                for(x2=0;x2<currentPatchWidth;x2++){
-                    for(y2=0;y2<currentPatchHeight;y2++){
-                        if(originalSource.at<uchar>(currentUpperLeft.y+y2,currentUpperLeft.x+x2)==0){
-                            skipPatch=true;
-
-                            break;
-                        }
-                }
-                }
-                if(skipPatch)
-                    continue;
-                error=0;
-
-                for(x2=0;x2<currentPatchWidth;x2++){
-                    for(y2=0;y2<currentPatchHeight;y2++){
-                        if(source.at<uchar>(a.y+y2,a.x+x2)==0)
-                            continue;
-                          pixel1=workImage.at<cv::Vec3b>(currentUpperLeft.y+y2,currentUpperLeft.x+x2);
-                          pixel2=workImage.at<cv::Vec3b>(a.y+y2,a.x+x2);
-                          pixel1[0]=pixel1[0]-pixel2[0];
-                          pixel1[1]=pixel1[1]-pixel2[1];
-                          pixel1[2]=pixel1[2]-pixel2[2];
-                          
-                          error+=(pixel1[0]*pixel1[0])+(pixel1[1]*pixel1[1])+(pixel1[2]*pixel1[2]);
-
-//                        pixeli1=grayImage.at<uchar>(currentUpperLeft.y+y2,currentUpperLeft.x+x2);
-//                        pixeli2=grayImage.at<uchar>(a.y+y2,a.x+x2);
-//                        error+=(pixeli1-pixeli2)*(pixeli1-pixeli2);
-
-
-                     }
-                }
-                if(error<minimumError){
-                    minimumError=error;
-                    bestMatchUpperLeft=currentUpperLeft;
-                    bestMatchLowerRight=currentLowerRight;
-                }
-
+                normals.push_back(normal);
 
             }
         }
-
-        y2=((cv::Point2f)fillFront.at(targetIndex)).y;
-        x2=((cv::Point2f)fillFront.at(targetIndex)).x;
-
-        for(x=0;x<currentPatchWidth;x++){
-            for(y=0;y<currentPatchHeight;y++){
-                if(source.at<uchar>(a.y+y,a.x+x)==0){
-                    workImage.at<cv::Vec3b>(a.y+y,a.x+x)=workImage.at<cv::Vec3b>(bestMatchUpperLeft.y+y,bestMatchUpperLeft.x+x);
-                    grayImage.at<uchar>(a.y+y,a.x+x)=grayImage.at<uchar>(bestMatchUpperLeft.y+y,bestMatchUpperLeft.x+x);
-                    confidence.at<float>(a.y+y,a.x+x)=confidence.at<float>(y2,x2);
-                    source.at<uchar>(a.y+y,a.x+x)=1;
-                    target.at<float>(a.y+y,a.x+x)=0;
-                }
-            }
-        }
-        stay=false;
-        for(x=0;x<source.cols;x++){
-            for(y=0;y<source.rows;y++){
-                if(source.at<uchar>(y,x)==0){
-                    stay=true;
-                    break;
-                }
-            }
-
-        }
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
     }
-
-    result=workImage.clone();
-    std::cout<<"done";
-
 
 
 }
 
-void inpainter::getPatch(cv::Point2f &centerPixel, cv::Point2f &upperLeft, cv::Point2f &lowerRight){
-    if(halfPatchWidth==0||halfPatchWidth%2==0)
-        halfPatchWidth=4;
+void Inpainter::computeConfidence(){
+    cv::Point2i a,b;
+    for(int i=0;i<fillFront.size();i++){
+        cv::Point2i currentPoint=fillFront.at(i);
+        getPatch(currentPoint,a,b);
+        float total=0;
+        for(int x=a.x;x<=b.x;x++){
+            for(int y=a.y;y<=b.y;y++){
+                if(targetRegion.at<uchar>(y,x)==0){
+                    total+=confidence.at<float>(y,x);
+                }
+            }
+        }
+        confidence.at<float>(currentPoint.y,currentPoint.x)=total/((b.x-a.x+1)*(b.y-a.y+1));
+    }
+}
 
+void Inpainter::computeData(){
+
+    for(int i=0;i<fillFront.size();i++){
+        cv::Point2i currentPoint=fillFront.at(i);
+        cv::Point2i currentNormal=normals.at(i);
+        data.at<float>(currentPoint.y,currentPoint.x)=std::fabs(gradientX.at<float>(currentPoint.y,currentPoint.x)*currentNormal.x+gradientY.at<float>(currentPoint.y,currentPoint.x)*currentNormal.y)+.001;
+    }
+}
+
+void Inpainter::computeTarget(){
+
+    targetIndex=0;
+    float maxPriority=0;
+    float priority=0;
+    cv::Point2i currentPoint;
+    for(int i=0;i<fillFront.size();i++){
+        currentPoint=fillFront.at(i);
+        priority=data.at<float>(currentPoint.y,currentPoint.x)*confidence.at<float>(currentPoint.y,currentPoint.x);
+        if(priority>maxPriority){
+            maxPriority=priority;
+            targetIndex=i;
+        }
+    }
+
+}
+
+void Inpainter::computeBestPatch(){
+    double minError=9999999999999999,bestPatchVarience=9999999999999999;
+    cv::Point2i a,b;
+    cv::Point2i currentPoint=fillFront.at(targetIndex);
+    cv::Vec3b sourcePixel,targetPixel;
+    double meanR,meanG,meanB;
+    double difference,patchError;
+    bool skipPatch;
+    getPatch(currentPoint,a,b);
+
+    int width=b.x-a.x+1;
+    int height=b.y-a.y+1;
+    for(int x=0;x<=workImage.cols-width;x++){
+        for(int y=0;y<=workImage.rows-height;y++){
+            patchError=0;
+            meanR=0;meanG=0;meanB=0;
+            skipPatch=false;
+
+            for(int x2=0;x2<width;x2++){
+                for(int y2=0;y2<height;y2++){
+                    if(originalSourceRegion.at<uchar>(y+y2,x+x2)==0){
+                        skipPatch=true;
+                        break;
+                     }
+
+                    if(sourceRegion.at<uchar>(a.y+y2,a.x+x2)==0)
+                        continue;
+
+                    sourcePixel=workImage.at<cv::Vec3b>(y+y2,x+x2);
+                    targetPixel=workImage.at<cv::Vec3b>(a.y+y2,a.x+x2);
+
+                    for(int i=0;i<3;i++){
+                        difference=sourcePixel[i]-targetPixel[i];
+                        patchError+=difference*difference;
+                    }
+                    meanB+=sourcePixel[0];meanG+=sourcePixel[1];meanR+=sourcePixel[2];
+
+
+                }
+                if(skipPatch)
+                    break;
+            }
+
+            if(skipPatch)
+                continue;
+            if(patchError<minError){
+                minError=patchError;
+                bestMatchUpperLeft=cv::Point2i(x,y);
+                bestMatchLowerRight=cv::Point2i(x+width-1,y+height-1);
+
+                double patchVarience=0;
+                for(int x2=0;x2<width;x2++){
+                    for(int y2=0;y2<height;y2++){
+                        if(sourceRegion.at<uchar>(a.y+y2,a.x+x2)==0){
+                            sourcePixel=workImage.at<cv::Vec3b>(y+y2,x+x2);
+                            difference=sourcePixel[0]-meanB;
+                            patchVarience+=difference*difference;
+                            difference=sourcePixel[1]-meanG;
+                            patchVarience+=difference*difference;
+                            difference=sourcePixel[2]-meanR;
+                            patchVarience+=difference*difference;
+                        }
+
+                    }
+                }
+                bestPatchVarience=patchVarience;
+
+            }else if(patchError==minError){
+                double patchVarience=0;
+                for(int x2=0;x2<width;x2++){
+                    for(int y2=0;y2<height;y2++){
+                        if(sourceRegion.at<uchar>(a.y+y2,a.x+x2)==0){
+                            sourcePixel=workImage.at<cv::Vec3b>(y+y2,x+x2);
+                            difference=sourcePixel[0]-meanB;
+                            patchVarience+=difference*difference;
+                            difference=sourcePixel[1]-meanG;
+                            patchVarience+=difference*difference;
+                            difference=sourcePixel[2]-meanR;
+                            patchVarience+=difference*difference;
+                        }
+
+                    }
+                }
+                if(patchVarience<bestPatchVarience){
+                    minError=patchError;
+                    bestMatchUpperLeft=cv::Point2i(x,y);
+                    bestMatchLowerRight=cv::Point2i(x+width-1,y+height-1);
+                    bestPatchVarience=patchVarience;
+                }
+            }
+    }
+    }
+
+
+}
+
+
+
+void Inpainter::updateMats(){
+    cv::Point2i targetPoint=fillFront.at(targetIndex);
+    cv::Point2i a,b;
+    getPatch(targetPoint,a,b);
+    int width=b.x-a.x+1;
+    int height=b.y-a.y+1;
+
+    for(int x=0;x<width;x++){
+        for(int y=0;y<height;y++){
+            if(sourceRegion.at<uchar>(a.y+y,a.x+x)==0){
+
+                workImage.at<cv::Vec3b>(a.y+y,a.x+x)=workImage.at<cv::Vec3b>(bestMatchUpperLeft.y+y,bestMatchUpperLeft.x+x);
+                gradientX.at<float>(a.y+y,a.x+x)=gradientX.at<float>(bestMatchUpperLeft.y+y,bestMatchUpperLeft.x+x);
+                gradientY.at<float>(a.y+y,a.x+x)=gradientY.at<float>(bestMatchUpperLeft.y+y,bestMatchUpperLeft.x+x);
+                confidence.at<float>(a.y+y,a.x+x)=confidence.at<float>(targetPoint.y,targetPoint.x);
+                sourceRegion.at<uchar>(a.y+y,a.x+x)=1;
+                targetRegion.at<uchar>(a.y+y,a.x+x)=0;
+                updatedMask.at<uchar>(a.y+y,a.x+x)=0;
+            }
+        }
+    }
+
+
+}
+
+bool Inpainter::checkEnd(){
+    for(int x=0;x<sourceRegion.cols;x++){
+        for(int y=0;y<sourceRegion.rows;y++){
+            if(sourceRegion.at<uchar>(y,x)==0){
+                return true;
+               }
+        }
+
+    }
+    return false;
+}
+void Inpainter::getPatch(cv::Point2i &centerPixel, cv::Point2i &upperLeft, cv::Point2i &lowerRight){
     int x,y;
     x=centerPixel.x;
     y=centerPixel.y;
@@ -252,6 +338,7 @@ void inpainter::getPatch(cv::Point2f &centerPixel, cv::Point2f &upperLeft, cv::P
     int maxX=std::min(x+halfPatchWidth,workImage.cols-1);
     int minY=std::max(y-halfPatchWidth,0);
     int maxY=std::min(y+halfPatchWidth,workImage.rows-1);
+
 
     upperLeft.x=minX;
     upperLeft.y=minY;

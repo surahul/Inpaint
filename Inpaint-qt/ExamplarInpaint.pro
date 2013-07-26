@@ -1,6 +1,6 @@
 #-------------------------------------------------
 #
-# Project created by QtCreator 2013-06-22T18:59:30
+# Project created by QtCreator 2013-07-26T15:19:17
 #
 #-------------------------------------------------
 
@@ -8,7 +8,7 @@ QT       += core
 
 QT       -= gui
 
-TARGET = Inpaint-qt
+TARGET = ExamplarInpaint
 CONFIG   += console
 CONFIG   -= app_bundle
 
@@ -16,9 +16,7 @@ TEMPLATE = app
 
 
 SOURCES += main.cpp \
-    inpainter.cpp \
-    gradientcalculator.cpp
-
+    inpainter.cpp
 
 INCLUDEPATH += C:\opencv\build\include
 
@@ -29,5 +27,4 @@ LIBS +=-LC:\opencv\release\lib\
 -lopencv_video245\
 
 HEADERS += \
-    inpainter.h \
-    gradientcalculator.h
+    inpainter.h

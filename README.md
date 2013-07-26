@@ -24,10 +24,10 @@ This issue was solved by using Variance Calculation in addition to SSD when to E
 
 Major issues that still needs to be solved :
 
-    -- Using Sobel derivative for calculating isophates appears to be erroneous. It does not well defines edges . See this image : https://dl.dropboxusercontent.com/u/23755950/gsoc4.JPG
+    - Using Sobel derivative for calculating isophates appears to be erroneous. It does not well defines edges . See this image : https://dl.dropboxusercontent.com/u/23755950/gsoc4.JPG
 I tried thresh-holding the sobel derivative output but that does not really helps . I need to do something like done in Canny algo , like keeping certain long edges only.
 
-    --Once an Exemplar is chosen to be copied to target patch , its isophates (normal gradient) are also copied to the target patch . This sometime leads to unnecessary high isophate values being copied to target patch boundary . This happens when Exemplar Patch boundary has strong isophates at certain pixels. 
+    -Once an Exemplar is chosen to be copied to target patch , its isophates (normal gradient) are also copied to the target patch . This sometime leads to unnecessary high isophate values being copied to target patch boundary . This happens when Exemplar Patch boundary has strong isophates at certain pixels. 
 I tried to solve this issue by recomputing isophates in every inpaint loop instead of copying them from Exemplar Patch , but this leads to other unnecessary isophates in target region
 So now I have to find a way of removing this issue.
 

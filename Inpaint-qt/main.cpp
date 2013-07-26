@@ -1,3 +1,45 @@
+/*M///////////////////////////////////////////////////////////////////////////////////////
+//
+//  IMPORTANT: READ BEFORE DOWNLOADING, COPYING, INSTALLING OR USING.
+//
+//  By downloading, copying, installing or using the software you agree to this license.
+//  If you do not agree to this license, do not download, install,
+//  copy or use the software.
+//
+//
+//                           License Agreement
+//                For Open Source Computer Vision Library
+//
+// Copyright (C) 2000-2008, Intel Corporation, all rights reserved.
+// Copyright (C) 2008-2012, Willow Garage Inc., all rights reserved.
+// Third party copyrights are property of their respective owners.
+//
+// Redistribution and use in source and binary forms, with or without modification,
+// are permitted provided that the following conditions are met:
+//
+//   * Redistribution's of source code must retain the above copyright notice,
+//     this list of conditions and the following disclaimer.
+//
+//   * Redistribution's in binary form must reproduce the above copyright notice,
+//     this list of conditions and the following disclaimer in the documentation
+//     and/or other materials provided with the distribution.
+//
+//   * The name of the copyright holders may not be used to endorse or promote products
+//     derived from this software without specific prior written permission.
+//
+// This software is provided by the copyright holders and contributors "as is" and
+// any express or implied warranties, including, but not limited to, the implied
+// warranties of merchantability and fitness for a particular purpose are disclaimed.
+// In no event shall the Intel Corporation or contributors be liable for any direct,
+// indirect, incidental, special, exemplary, or consequential damages
+// (including, but not limited to, procurement of substitute goods or services;
+// loss of use, data, or profits; or business interruption) however caused
+// and on any theory of liability, whether in contract, strict liability,
+// or tort (including negligence or otherwise) arising in any way out of
+// the use of this software, even if advised of the possibility of such damage.
+//
+//M*/
+
 #include "inpainter.h"
 
 cv::Mat image,originalImage,inpaintMask;
@@ -27,12 +69,24 @@ static void onMouse( int event, int x, int y, int flags, void* )
 int main(int argc, char *argv[])
 {
 
-    //we expect two arguments.
+    //we expect three arguments.
     //the first is the image path.
     //the second is the mask path.
+    //the third argument is the halfPatchWidth
 
-    //in case only image path is speciifed, we use manual marking of mask over the image
-    //in case image name is also not specified , we use default image default.jpg
+    //in case halPatchWidth is not specified we use a default value of 3.
+    //in case only image path is speciifed, we use manual marking of mask over the image.
+    //in case image name is also not specified , we use default image default.jpg.
+
+
+    int halfPatchWidth=3;
+
+    if(argc>=4)
+    {
+        std::stringstream ss;
+        ss<<argv[3];
+        ss>>halfPatchWidth;
+    }
 
     char* imageName = argc >= 2 ? argv[1] : (char*)"default.jpg";
 
@@ -56,7 +110,7 @@ int main(int argc, char *argv[])
 
     if(maskSpecified){
         inpaintMask=cv::imread(maskName,CV_LOAD_IMAGE_GRAYSCALE);
-        Inpainter i(originalImage,inpaintMask,3);
+        Inpainter i(originalImage,inpaintMask,halfPatchWidth);
         if(i.checkValidInputs()==i.CHECK_VALID){
             i.inpaint();
             cv::imwrite("result.jpg",i.result);
@@ -91,7 +145,7 @@ int main(int argc, char *argv[])
 
                 if( c == 'i' || c == ' ' )
                 {
-                    Inpainter i(originalImage,inpaintMask,3);
+                    Inpainter i(originalImage,inpaintMask,halfPatchWidth);
                     if(i.checkValidInputs()==i.CHECK_VALID){
                         i.inpaint();
                         cv::imwrite("result.jpg",i.result);

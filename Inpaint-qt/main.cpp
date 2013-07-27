@@ -79,7 +79,7 @@ int main(int argc, char *argv[])
     //in case image name is also not specified , we use default image default.jpg.
 
 
-    int halfPatchWidth=3;
+    int halfPatchWidth=4;
 
     if(argc>=4)
     {

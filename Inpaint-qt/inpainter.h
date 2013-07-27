@@ -58,7 +58,7 @@ public:
     const static int ERROR_HALF_PATCH_WIDTH_ZERO=3;
     const static int CHECK_VALID=4;
 
-    Inpainter(cv::Mat inputImage,cv::Mat mask,int halfPatchWidth=3,int mode=1);
+    Inpainter(cv::Mat inputImage,cv::Mat mask,int halfPatchWidth=4,int mode=1);
 
     cv::Mat inputImage;
     cv::Mat mask,updatedMask;
